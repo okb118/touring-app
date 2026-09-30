@@ -322,18 +322,35 @@ const km = (a, b) => {
 const map = L.map("map", { zoomControl: false }).setView([35.2, 135.6], 9);
 const gsiAttr = '<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a>';
 const ofmAttr = '<a href="https://openfreemap.org" target="_blank" rel="noopener noreferrer">OpenFreeMap</a> © <a href="https://openmaptiles.org/" target="_blank" rel="noopener noreferrer">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>';
-const ofm = name => !L.maplibreGL ? L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", { maxZoom: 18, attribution: gsiAttr }) : L.maplibreGL({ style: "https://tiles.openfreemap.org/styles/" + name, attribution: ofmAttr });
-const base = {
-  "カラフル(Liberty)": ofm("liberty"),
-  "すっきり(Positron)": ofm("positron"),
-  "Bright": ofm("bright"),
-  "ダーク": ofm("dark"),
+// 地図の種類。ベクター地図(WebGL)は1枚のレイヤーを使いまわして、スタイルだけ差し替える(作り直すと重い・止まるため)
+const STYLES = { "カラフル(Liberty)": "liberty", "すっきり(Positron)": "positron", "Bright": "bright", "ダーク": "dark" };
+const RASTER = {
   "国土地理院 淡色": L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", { maxZoom: 18, attribution: gsiAttr }),
   "国土地理院 写真": L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", { maxZoom: 18, attribution: gsiAttr })
 };
+const styleUrl = n => "https://tiles.openfreemap.org/styles/" + STYLES[n];
+let glLayer = null, activeRaster = null;
+function useBase(name) {
+  if (STYLES[name] && L.maplibreGL) {
+    if (activeRaster) { map.removeLayer(activeRaster); activeRaster = null; }
+    if (!glLayer) { glLayer = L.maplibreGL({ style: styleUrl(name), attribution: ofmAttr }).addTo(map); return; }
+    const gm = glLayer.getMaplibreMap && glLayer.getMaplibreMap();
+    if (gm) gm.setStyle(styleUrl(name), { diff: false });
+    else { map.removeLayer(glLayer); glLayer = L.maplibreGL({ style: styleUrl(name), attribution: ofmAttr }).addTo(map); }
+  } else {
+    if (glLayer) { map.removeLayer(glLayer); glLayer = null; }   // 写真などに切り替えるときは、WebGLを完全に手放す
+    const r = RASTER[name] || RASTER["国土地理院 淡色"];
+    if (activeRaster && activeRaster !== r) map.removeLayer(activeRaster);
+    activeRaster = r; if (!map.hasLayer(r)) r.addTo(map);
+  }
+}
+// 右上のボタンの選択肢は、軽い見出し用のレイヤー。選ばれたら、実際の地図を差し替える
+const base = {};
+["カラフル(Liberty)", "すっきり(Positron)", "Bright", "ダーク", "国土地理院 淡色", "国土地理院 写真"].forEach(n => { base[n] = L.layerGroup(); });
 base["カラフル(Liberty)"].addTo(map);
+useBase("カラフル(Liberty)");
 L.control.layers(base, null, { position: "topright" }).addTo(map);
-map.on("baselayerchange", e => { if (!swapping) { baseAuto = false; currentBaseName = e.name; } });
+map.on("baselayerchange", e => { useBase(e.name); if (!swapping) { baseAuto = false; currentBaseName = e.name; } });
 // ---- テーマ(自動: 18時〜翌6時はダーク / ライト / ダーク) ----
 const THEME_KEY = "touring.theme.v1";
 const THEME_ORDER = ["auto", "light", "dark"];
