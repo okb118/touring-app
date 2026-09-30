@@ -147,6 +147,18 @@ select:focus, input:focus, textarea:focus, button:focus-visible { outline: 2px s
   #fabs { top: 64px; right: 10px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+#nowWx { margin: 0 20px 8px; padding: 10px 12px; border-radius: 14px; background: var(--chip); font-size: 13px; line-height: 1.55; }
+#nowWx .big { font-size: 22px; font-weight: 800; }
+#nowWx .sub { color: var(--ink2); font-size: 12px; }
+#myPage h3 { font-size: 14px; margin: 14px 0 4px; }
+.mine { display: flex; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid rgba(128,128,128,.25); }
+.mine img { width: 54px; height: 54px; object-fit: cover; border-radius: 10px; flex: none; }
+.mine .mt { flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; word-break: break-all; }
+.mine .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--chip); color: var(--ink2); margin-left: 4px; }
+.mine .badge.ok { background: #12a15022; color: #12a150; }
+.mine .ops { display: flex; flex-direction: column; gap: 4px; flex: none; }
+.mine .ops button { border: 0; border-radius: 8px; padding: 5px 10px; font-size: 12px; font-weight: 700; background: var(--chip); color: var(--ink); }
+.mine .ops button.del { background: var(--bad); color: #fff; }
 </style>
 </head>
 <body>
@@ -158,6 +170,7 @@ select:focus, input:focus, textarea:focus, button:focus-visible { outline: 2px s
     <h1>今日<em>どこ</em>走る?</h1>
     <p id="status">天気を取得中…</p>
   </div>
+  <div id="nowWx" hidden></div>
   <div class="search">
     <input type="search" id="q" placeholder="スポット名・地名で検索(例: 天橋立、箱根)" autocomplete="off" enterkeyhint="search" aria-label="検索">
     <div id="qRes" hidden></div>
@@ -213,6 +226,13 @@ select:focus, input:focus, textarea:focus, button:focus-visible { outline: 2px s
 
 <div id="modal" hidden>
   <div class="modal-card">
+    <div id="myPage" hidden>
+      <h2>マイページ</h2>
+      <p class="small" style="margin:0 0 6px;">自分の投稿を、ここから編集・削除できます。編集すると、もう一度確認されるまで、あなたにだけ表示されます。</p>
+      <div id="myList"></div>
+      <div class="actions"><button class="btn ghost" type="button" id="closeMyPage">閉じる</button></div>
+    </div>
+    <form id="editForm" hidden></form>
     <form id="spotForm" hidden>
       <h2>スポットを投稿</h2>
       <label class="field">名前<input type="text" id="sName" required maxlength="60" placeholder="例: ○○展望台"></label>
@@ -355,7 +375,36 @@ let wxCache = {};
 try { wxCache = JSON.parse(localStorage.getItem(WX_KEY) || "{}"); } catch (e) { wxCache = {}; }
 let wxBusy = false, wxAgain = false, wxTimer = null;
 function loadWeatherSoon() { clearTimeout(wxTimer); wxTimer = setTimeout(loadWeather, 400); }
+let nowWx = null, nowWxBusy = false;
+async function loadNowWx() {
+  const box = $("nowWx");
+  if (!userPos) { box.hidden = true; return; }
+  const key = userPos.lat.toFixed(2) + "," + userPos.lng.toFixed(2);
+  if (nowWx && nowWx.key === key && Date.now() - nowWx.t < 15 * 60 * 1000) return;
+  if (nowWxBusy) return;
+  nowWxBusy = true;
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${userPos.lat}&longitude=${userPos.lng}` +
+      "&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m&hourly=precipitation_probability" +
+      "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunset&wind_speed_unit=ms&timezone=Asia%2FTokyo&forecast_days=1";
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(r.status);
+    const j = await r.json(), c = j.current, d = j.daily;
+    let next3 = null;
+    if (j.hourly && c && c.time) {
+      const i = j.hourly.time.findIndex(t => t.slice(0, 13) === c.time.slice(0, 13));
+      if (i >= 0) { const v = j.hourly.precipitation_probability.slice(i, i + 3).filter(x => x != null); if (v.length) next3 = Math.max(...v); }
+    }
+    box.innerHTML = `<div><span class="big">${WEATHER_ICON(c.weather_code)} ${Math.round(c.temperature_2m)}℃</span> <span class="sub">体感 ${Math.round(c.apparent_temperature)}℃ / 風 ${Math.round(c.wind_speed_10m)}m/s / ${esc(WEATHER_TEXT(c.weather_code))}</span></div>` +
+      `<div class="sub">📍 現在地 ・ 今日 ${Math.round(d.temperature_2m_min[0])}〜${Math.round(d.temperature_2m_max[0])}℃ ・ 降水確率 最大${d.precipitation_probability_max[0] ?? 0}%` +
+      `${next3 != null ? "(これから3時間 " + next3 + "%)" : ""} ・ 日の入り ${esc((d.sunset[0] || "").slice(11, 16))}</div>`;
+    box.hidden = false;
+    nowWx = { key, t: Date.now() };
+  } catch (e) { box.hidden = true; }
+  nowWxBusy = false;
+}
 async function loadWeather() {
+  loadNowWx();
   if (wxBusy) { wxAgain = true; return; }
   wxBusy = true;
   try {
@@ -502,6 +551,7 @@ function drawAcct() {
     box(`<div class="an">ゲスト</div><div class="small">Googleでログインすると、いまの投稿や評価を引き継いで、別の端末でも自分の投稿を管理できます。</div>`);
     const b = document.createElement("button"); b.className = "btn"; b.type = "button"; b.textContent = "Googleでログイン"; b.onclick = googleLogin; menu.appendChild(b);
   }
+  const m = document.createElement("button"); m.className = "btn ghost"; m.type = "button"; m.textContent = "📁 マイページ(自分の投稿)"; m.onclick = () => { menu.hidden = true; openMyPage(); }; menu.appendChild(m);
 }
 async function googleLogin() {
   if (!sb) { toast("ログイン機能を読み込めませんでした"); return; }
@@ -541,6 +591,12 @@ async function sbUpsert(table, row, conflict) {
 async function sbPost(table, row) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, { method: "POST", headers: await hdr({ Prefer: "return=minimal" }), body: JSON.stringify(row) });
   if (!r.ok) throw new Error(r.status);
+}
+async function sbPatch(table, id, body) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, { method: "PATCH", headers: await hdr({ Prefer: "return=representation" }), body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(r.status);
+  const rows = await r.json();
+  if (!rows.length) throw new Error("not-updated");
 }
 async function sbDelete(table, id) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, { method: "DELETE", headers: await hdr({ Prefer: "return=representation" }) });
@@ -660,7 +716,7 @@ $("ratingForm").onsubmit = async e => {
   catch (err) { toast("評価を送れませんでした"); }
   $("rateSubmit").disabled = false;
 };
-async function afterRemoteChange() { await loadRemote(); render(); renderParks(); loadWeatherSoon(); }
+async function afterRemoteChange() { await loadRemote(); render(); renderParks(); loadWeatherSoon(); if (!$("myPage").hidden) drawMyPage(); }
 map.on("popupopen", e => {
   const el = e.popup.getElement();
   const rb = el.querySelector("[data-rate]");
@@ -688,14 +744,100 @@ map.on("popupopen", e => {
   if (d) d.onclick = () => { saveUserSpots(loadUserSpots().filter(s => s.id !== d.dataset.delspot)); map.closePopup(); render(); loadWeather(); };
 });
 
+// ---- マイページ(自分の投稿の一覧・編集・削除) ----
+function spotNameOf(id) { const s = allSpots().find(x => x.id === id); return s ? s.name : "(スポット)"; }
+function drawMyPage() {
+  const box = $("myList"); box.innerHTML = "";
+  const spots = remoteSpots.filter(x => x.mine), parks = remoteParks.filter(x => x.mine);
+  const photos = Object.values(photosBySpot).flat().filter(x => x.mine);
+  const badge = st => `<span class="badge ${st ? "" : "ok"}">${st ? "承認待ち" : "公開中"}</span>`;
+  const section = (title, items, build) => {
+    const h = document.createElement("h3"); h.textContent = `${title}(${items.length})`; box.appendChild(h);
+    if (!items.length) { const p = document.createElement("p"); p.className = "small"; p.textContent = "まだありません"; box.appendChild(p); return; }
+    items.forEach(it => box.appendChild(build(it)));
+  };
+  const row = (thumb, html, ops) => {
+    const d = document.createElement("div"); d.className = "mine";
+    if (thumb) { const im = document.createElement("img"); im.loading = "lazy"; im.alt = ""; im.src = thumb; d.appendChild(im); }
+    const t = document.createElement("div"); t.className = "mt"; t.innerHTML = html; d.appendChild(t);
+    const o = document.createElement("div"); o.className = "ops";
+    ops.forEach(([label, fn, cls]) => {
+      const b = document.createElement("button"); b.type = "button"; b.textContent = label; if (cls) b.className = cls;
+      b.onclick = () => fn(b); o.appendChild(b);
+    });
+    d.appendChild(o); return d;
+  };
+  const del = (table, item, extra) => async b => {
+    if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "本当に削除?"; return; }
+    b.disabled = true;
+    try { if (extra) await extra(); await sbDelete(table, item.dbId || item.id); toast("削除しました"); await afterRemoteChange(); }
+    catch (err) { toast("削除できませんでした"); b.disabled = false; }
+  };
+  section("スポット", spots, s => row(null, `<b>${esc(s.name)}</b>${badge(s.pending)}<br><small>${esc(s.area)}</small>`, [
+    ["地図で見る", () => { hideForms(); showSpot(s); if (window.innerWidth <= 720) $("panel").classList.add("peek"); }],
+    ["編集", () => openEdit("spots", s)],
+    ["削除", del("spots", s, async () => { for (const p of (photosBySpot[s.id] || []).filter(x => x.mine)) { await sbDelete("photos", p.id); if (sb) await sb.storage.from("spot-photos").remove([p.path]); } }), "del"]]));
+  section("駐車場", parks, p => row(null, `<b>${esc(p.name)}</b>${badge(p.pending)}<br><small>${esc(p.fee || "料金不明")}</small>`, [
+    ["地図で見る", () => { hideForms(); centerOn([p.lat, p.lng], 15); if (window.innerWidth <= 720) $("panel").classList.add("peek"); }],
+    ["編集", () => openEdit("parking", p)],
+    ["削除", del("parking", p), "del"]]));
+  section("写真", photos, p => row(photoUrl(p.path), `<b>${esc(spotNameOf(p.spot_id))}</b>${badge(p.status !== "approved")}<br><small>${esc(p.caption || "(ひとことなし)")}</small>`, [
+    ["編集", () => openEdit("photos", p)],
+    ["削除", del("photos", p, async () => { if (sb) await sb.storage.from("spot-photos").remove([p.path]); }), "del"]]));
+}
+function openMyPage() { map.closePopup(); drawMyPage(); showForm("mypage"); }
+$("closeMyPage").onclick = hideForms;
+let editing = null;
+function openEdit(kind, it) {
+  editing = { kind, it };
+  const f = $("editForm");
+  const CLS = [["", "不明"], ["50", "原付"], ["125", "〜125cc"], ["250", "〜250cc"], ["999", "大型OK"]];
+  let h = "";
+  if (kind === "spots") {
+    const tg = new Set(it.tags || []);
+    h = `<h2>スポットを編集</h2><label class="field">名前<input type="text" id="eName" required maxlength="60" value="${esc(it.name)}"></label>` +
+      `<label class="field">場所(市町村など)<input type="text" id="eArea" maxlength="40" value="${esc(it.area === "ユーザー投稿" ? "" : it.area)}"></label>` +
+      `<div class="small">特徴</div><div>${TAGS.map(t => `<label class="chk"><input type="checkbox" name="eTag" value="${esc(t)}"${tg.has(t) ? " checked" : ""}> ${esc(t)}</label>`).join("")}</div>` +
+      `<label class="field">メモ<textarea id="eNote" rows="2" maxlength="200">${esc(it.bike && it.bike.note)}</textarea></label>`;
+  } else if (kind === "parking") {
+    h = `<h2>駐車場を編集</h2><label class="field">名前<input type="text" id="eName" required maxlength="60" value="${esc(it.name)}"></label>` +
+      `<label class="field">停められるバイク<select id="eCls">${CLS.map(([v, l]) => `<option value="${v}"${String(it.cls || "") === v ? " selected" : ""}>${l}</option>`).join("")}</select></label>` +
+      `<label class="field">料金<input type="text" id="eFee" maxlength="60" value="${esc(it.fee)}"></label>` +
+      `<label class="chk"><input type="checkbox" id="eRoof"${it.roof ? " checked" : ""}> 屋根あり</label>` +
+      `<label class="field">メモ<textarea id="eNote" rows="2" maxlength="200">${esc(it.note)}</textarea></label>`;
+  } else {
+    h = `<h2>写真のひとことを編集</h2><label class="field">ひとこと<input type="text" id="eCap" maxlength="100" value="${esc(it.caption)}"></label>`;
+  }
+  h += `<p class="small">保存すると、もう一度確認されるまで、あなたにだけ表示されます。</p><div class="actions"><button class="btn" type="submit" id="eSave">保存する</button><button class="btn ghost" type="button" id="eCancel">戻る</button></div>`;
+  f.innerHTML = h;
+  $("eCancel").onclick = () => { drawMyPage(); showForm("mypage"); };
+  showForm("edit");
+}
+$("editForm").onsubmit = async e => {
+  e.preventDefault();
+  if (!editing) return;
+  const { kind, it } = editing;
+  let body;
+  if (kind === "spots") body = { name: $("eName").value.trim(), area: $("eArea").value.trim() || null, note: $("eNote").value.trim() || null,
+    tags: [...document.querySelectorAll('input[name="eTag"]:checked')].map(c => c.value), status: "pending" };
+  else if (kind === "parking") body = { name: $("eName").value.trim(), cls: $("eCls").value ? Number($("eCls").value) : null, fee: $("eFee").value.trim() || null,
+    roof: $("eRoof").checked, note: $("eNote").value.trim() || null, status: "pending" };
+  else body = { caption: $("eCap").value.trim() || null, status: "pending" };
+  if ((kind !== "photos") && !body.name) return;
+  $("eSave").disabled = true;
+  try { await sbPatch(kind, it.dbId || it.id, body); toast("保存しました。確認されるまで、あなたにだけ表示されます"); await afterRemoteChange(); showForm("mypage"); }
+  catch (err) { toast("保存できませんでした(SQLの設定が済んでいるか確認してください)"); }
+  $("eSave").disabled = false;
+};
+
 let adding = false, addKind = "park", picked = null, pickMarker = null;
 function setAdding(on) {
   adding = on; $("mode").hidden = !on;
   map.getContainer().style.cursor = on ? "crosshair" : "";
 }
-function hideForms() { $("parkForm").hidden = true; $("spotForm").hidden = true; $("photoForm").hidden = true; $("ratingForm").hidden = true; $("modal").hidden = true; }
+function hideForms() { $("parkForm").hidden = true; $("spotForm").hidden = true; $("photoForm").hidden = true; $("ratingForm").hidden = true; $("myPage").hidden = true; $("editForm").hidden = true; $("modal").hidden = true; }
 function showForm(kind) {
-  $("modal").hidden = false; $("parkForm").hidden = kind !== "park"; $("spotForm").hidden = kind !== "spot"; $("photoForm").hidden = kind !== "photo"; $("ratingForm").hidden = kind !== "rating";
+  $("modal").hidden = false; $("parkForm").hidden = kind !== "park"; $("spotForm").hidden = kind !== "spot"; $("photoForm").hidden = kind !== "photo"; $("ratingForm").hidden = kind !== "rating"; $("myPage").hidden = kind !== "mypage"; $("editForm").hidden = kind !== "edit";
   if (kind === "spot") $("sName").focus(); else if (kind === "park") $("pName").focus();
 }
 function startAdd(kind) { hideForms(); $("addMenu").hidden = true; addKind = kind; setAdding(true); if (window.innerWidth <= 720) $("panel").classList.add("peek"); }
@@ -857,11 +999,14 @@ function onQuery() {
     catch (e) { if (seq === qSeq) drawResults(spots, [], "error"); }
   }, 350);
 }
-$("q").addEventListener("input", onQuery);
+let composing = false;   // 日本語入力の変換中は、Enterで検索結果を選ばない(変換の確定と二重に処理されて、文字が2回入るため)
+$("q").addEventListener("compositionstart", () => { composing = true; });
+$("q").addEventListener("compositionend", () => { composing = false; onQuery(); });
+$("q").addEventListener("input", e => { if (!e.isComposing) onQuery(); });
 $("q").addEventListener("focus", () => { $("panel").classList.remove("peek"); if ($("q").value.trim()) onQuery(); });
 $("q").addEventListener("keydown", e => {
   if (e.key === "Escape") { closeResults(); $("q").blur(); }
-  if (e.key === "Enter") { const first = $("qRes").querySelector("button"); if (first) first.click(); }
+  if (e.key === "Enter") { if (e.isComposing || e.keyCode === 229 || composing) return; const first = $("qRes").querySelector("button"); if (first) first.click(); }
 });
 document.addEventListener("click", e => { if (!e.target.closest(".search")) closeResults(); });
 function updateReSearch() {   // 地図を動かして、いまの表示範囲から外れたら「このエリアで探す」を出す
