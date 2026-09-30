@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>今日どこ走る?(仮)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script>
+// 読み込み時のちらつきを防ぐため、先にテーマを決めておく
+(function () { try { var p = localStorage.getItem("touring.theme.v1") || "auto", hr = new Date().getHours();
+  document.documentElement.dataset.theme = p === "auto" ? ((hr >= 18 || hr < 6) ? "dark" : "light") : p; } catch (e) {} })();
+</script>
+<style>
+:root {
+  --ink: #0f1720; --ink2: #56636f; --panel: rgba(255,255,255,.94); --line: #e3e8ee; --chip: #eef1f5;
+  --accent: #ff4d0d; --accent-ink: #fff; --good: #12a150; --warn: #e0a100; --bad: #d64545; --track: #e3e8ee;
+  --shadow: 0 10px 30px rgba(15,23,32,.18); --solid: #ffffff; --bg: #dfe6ec; --warn-bg: #fdeccc; --warn-ink: #7a5200; --link: #2b6cff;
+  --font-display: "Dela Gothic One", "Noto Sans JP", sans-serif; --font-body: "Noto Sans JP", -apple-system, "Hiragino Sans", sans-serif;
+}
+:root[data-theme="dark"] { color-scheme: dark; --ink: #f2f5f8; --ink2: #a3afbb; --panel: rgba(20,27,38,.94); --solid: #16202d; --bg: #0d1622; --line: #2a3441; --chip: #253040; --track: #2f3b4b; --shadow: 0 10px 30px rgba(0,0,0,.55); --warn-bg: #4a3a12; --warn-ink: #ffd98a; --link: #7db3ff; --accent: #ff5a24; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { font-family: var(--font-body); color: var(--ink); background: var(--bg); overflow: hidden; }
+#map { position: absolute; inset: 0; }
+button { font-family: inherit; cursor: pointer; }
+
+/* パネル: PCは左に浮かぶカード、スマホは下から出るシート */
+#panel { position: absolute; z-index: 1000; left: 16px; top: 16px; bottom: 16px; width: 384px; display: flex; flex-direction: column;
+  background: var(--panel); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-radius: 22px; box-shadow: var(--shadow); overflow: hidden; }
+.grab { display: none; border: 0; background: none; padding: 10px 0 4px; width: 100%; }
+.grab::after { content: ""; display: block; width: 44px; height: 5px; border-radius: 3px; background: var(--line); margin: 0 auto; }
+.head { padding: 18px 20px 8px; }
+.head h1 { font-family: var(--font-display); font-weight: 400; font-size: 26px; line-height: 1.15; margin: 0; letter-spacing: .01em; }
+.head h1 em { font-style: normal; color: var(--accent); }
+.head p { margin: 6px 0 0; font-size: 12px; color: var(--ink2); }
+.scroll { flex: 1; overflow-y: auto; padding: 4px 16px 16px; min-height: 0; }
+.row { display: flex; gap: 8px; padding: 6px 20px; }
+.row.scroll-x { overflow-x: auto; scrollbar-width: none; }
+.row.scroll-x::-webkit-scrollbar { display: none; }
+.chips button { flex: none; border: 0; background: var(--chip); color: var(--ink); font-size: 13px; font-weight: 700; padding: 8px 14px; border-radius: 999px; }
+.chips button.on { background: var(--ink); color: var(--panel); }
+.chips.days button { flex: 1; padding: 10px 0; font-size: 14px; }
+.chips.days button.on { background: var(--accent); color: var(--accent-ink); }
+details.more { margin: 6px 20px 4px; font-size: 13px; }
+details.more summary { cursor: pointer; font-weight: 700; color: var(--ink2); padding: 6px 0; }
+.field { display: block; margin: 8px 0; font-size: 12px; color: var(--ink2); }
+select, input[type=text], textarea { width: 100%; margin-top: 4px; padding: 10px 12px; font: inherit; font-size: 14px; color: var(--ink); background: var(--chip); border: 1px solid transparent; border-radius: 12px; }
+select:focus, input:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg { display: flex; gap: 6px; margin: 8px 0; }
+.seg button { flex: 1; border: 1px solid var(--line); background: none; color: var(--ink); padding: 8px; border-radius: 12px; font-size: 13px; font-weight: 700; }
+.seg button.on { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+.small { font-size: 12px; color: var(--ink2); line-height: 1.6; }
+.warn-text { color: var(--bad); }
+.btn { border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 14px; padding: 11px 18px; border-radius: 12px; }
+.btn.ghost { background: var(--chip); color: var(--ink); }
+.btn.danger { background: var(--bad); }
+
+/* スポットカード */
+.card { display: flex; gap: 14px; align-items: center; padding: 12px; margin: 8px 0; border-radius: 18px; background: var(--chip); cursor: pointer; transition: transform .12s ease; }
+.card:hover { transform: translateY(-1px); }
+.ring { --p: 0; flex: none; width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center;
+  background: conic-gradient(var(--c) calc(var(--p) * 1%), var(--track) 0); }
+.ring span { width: 46px; height: 46px; border-radius: 50%; background: var(--panel); display: grid; place-items: center; font-weight: 900; font-size: 18px; font-variant-numeric: tabular-nums; }
+.cbody { min-width: 0; flex: 1; }
+.ctitle { font-weight: 900; font-size: 15px; line-height: 1.35; }
+.best { display: inline-block; background: var(--accent); color: var(--accent-ink); font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; margin-right: 6px; vertical-align: 2px; }
+.cmeta { font-size: 12px; color: var(--ink2); margin-top: 2px; }
+.ctags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.tag { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--panel); color: var(--ink2); }
+.tag.warn { background: var(--warn-bg); color: var(--warn-ink); }
+.cam { flex: none; width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--panel); font-size: 18px; box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+.thumb { flex: none; width: 64px; height: 64px; object-fit: cover; border-radius: 14px; background: var(--track); }
+.pstrip { display: flex; gap: 6px; overflow-x: auto; margin: 6px 0; }
+.pstrip img { flex: none; height: 110px; border-radius: 10px; background: var(--track); }
+.pop .pbtn { background: var(--accent); margin-top: 6px; }
+.pstrip .ph { position: relative; flex: none; }
+.pstrip .ph.wait img { opacity: .55; }
+.pstrip .pw { position: absolute; left: 6px; bottom: 6px; background: rgba(0,0,0,.65); color: #fff; font-size: 10px; padding: 1px 6px; border-radius: 999px; }
+.pstrip .pdel { position: absolute; right: 4px; top: 4px; width: auto; min-width: 26px; height: 26px; padding: 0 6px; border: 0; border-radius: 999px; background: rgba(0,0,0,.7); color: #fff; font-size: 12px; }
+.pop .rep { background: none; color: var(--ink2); border: 1px solid var(--line); margin-top: 6px; }
+.search { position: relative; padding: 4px 20px 6px; }
+.search input { width: 100%; margin: 0; padding: 11px 14px; border-radius: 14px; font-size: 14px; }
+#qRes { position: absolute; left: 20px; right: 20px; top: 100%; z-index: 1300; max-height: 320px; overflow-y: auto; background: var(--solid); border-radius: 16px; box-shadow: var(--shadow); padding: 6px; }
+#qRes .qh { font-size: 11px; font-weight: 700; color: var(--ink2); padding: 8px 10px 4px; }
+#qRes button { display: flex; width: 100%; gap: 10px; align-items: center; text-align: left; border: 0; background: none; color: var(--ink); padding: 10px; border-radius: 10px; font-size: 14px; }
+#qRes button:hover, #qRes button:focus-visible { background: var(--chip); }
+#qRes .qs { font-size: 11px; color: var(--ink2); margin-left: auto; flex: none; }
+#qRes .qe { padding: 12px 10px; font-size: 13px; color: var(--ink2); }
+.areachip { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin: 6px 0; padding: 8px 12px; border-radius: 12px; background: var(--chip); font-size: 12px; color: var(--ink2); }
+.areachip button { border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 12px; padding: 5px 12px; border-radius: 999px; }
+#reSearch { position: absolute; z-index: 950; top: 16px; left: calc(416px + (100vw - 416px) / 2); transform: translateX(-50%); border: 0; padding: 12px 20px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-weight: 800; font-size: 14px; box-shadow: var(--shadow); }
+@media (max-width: 720px) { #reSearch { left: 50%; top: 14px; } }
+.rrow { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 8px 0; font-size: 14px; font-weight: 700; }
+.stars { display: flex; }
+.stars button { border: 0; background: none; font-size: 28px; line-height: 1; color: var(--track); padding: 0 2px; }
+.stars button.on { color: #f5b301; }
+.stars-s { color: #f5b301; font-weight: 900; }
+.fab img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+#acctMenu { width: 270px; background: var(--solid); color: var(--ink); padding: 14px; border-radius: 16px; box-shadow: var(--shadow); font-size: 13px; line-height: 1.6; }
+#acctMenu .btn { width: 100%; margin-top: 10px; }
+#acctMenu .an { font-weight: 800; font-size: 15px; word-break: break-all; }
+.empty { text-align: center; color: var(--ink2); font-size: 13px; padding: 24px 8px; }
+
+/* 地図上のボタン */
+#fabs { position: absolute; z-index: 900; right: 14px; top: 76px; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+.fab { width: 52px; height: 52px; border-radius: 50%; border: 0; background: var(--panel); color: var(--ink); font-size: 22px; box-shadow: var(--shadow); }
+.fab.primary { background: var(--accent); color: var(--accent-ink); font-size: 28px; font-weight: 300; }
+#addMenu { display: flex; flex-direction: column; gap: 8px; background: var(--panel); padding: 10px; border-radius: 16px; box-shadow: var(--shadow); }
+#mode { position: absolute; z-index: 1100; top: 14px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--panel); padding: 10px 14px; border-radius: 999px; font-size: 13px; font-weight: 700; display: flex; gap: 10px; align-items: center; box-shadow: var(--shadow); white-space: nowrap; }
+#mode button { border: 0; background: var(--accent); color: var(--accent-ink); border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 700; }
+
+/* ピン */
+.pin { min-width: 38px; height: 30px; padding: 0 8px; display: grid; place-items: center; border-radius: 999px; font-weight: 900; font-size: 14px; color: #fff; border: 3px solid #fff; box-shadow: 0 2px 8px rgba(0,0,0,.4); font-variant-numeric: tabular-nums; }
+.pin.spot { background: var(--c, #7b8794); }
+.pin.park { background: #2b6cff; }
+
+/* 投稿フォーム(モーダル) */
+#modal { position: fixed; inset: 0; z-index: 2000; background: rgba(8,12,18,.5); display: grid; place-items: center; padding: 16px; }
+.modal-card { width: 100%; max-width: 440px; max-height: 92vh; overflow-y: auto; background: var(--panel); backdrop-filter: blur(14px); border-radius: 22px; padding: 20px; box-shadow: var(--shadow); }
+.modal-card h2 { font-family: var(--font-display); font-weight: 400; font-size: 20px; margin: 0 0 8px; }
+.actions { display: flex; gap: 8px; margin-top: 12px; }
+.chk { display: inline-flex; gap: 6px; align-items: center; margin: 6px 12px 6px 0; font-size: 14px; }
+#toast { position: fixed; z-index: 3000; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--panel); padding: 12px 18px; border-radius: 14px; font-size: 14px; font-weight: 700; max-width: 90vw; box-shadow: var(--shadow); }
+
+/* 地図の部品 */
+.leaflet-control-layers { border-radius: 14px !important; border: 0 !important; box-shadow: var(--shadow) !important; background: var(--solid) !important; color: var(--ink) !important; }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--solid) !important; color: var(--ink) !important; }
+.leaflet-container .leaflet-control-attribution { background: var(--panel) !important; color: var(--ink2) !important; }
+.leaflet-control-attribution a { color: var(--link) !important; }
+.leaflet-popup-content-wrapper { border-radius: 16px; }
+.leaflet-popup-content { font-family: var(--font-body); font-size: 13px; line-height: 1.7; margin: 14px 16px; }
+.pop a { color: var(--link); font-weight: 700; }
+.pop button { border: 0; background: var(--bad); color: #fff; padding: 5px 10px; border-radius: 8px; font-size: 12px; }
+
+@media (max-width: 720px) {
+  #panel { left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 64vh; border-radius: 22px 22px 0 0; transition: max-height .25s ease; }
+  #panel.peek { max-height: 168px; }
+  .grab { display: block; }
+  .head { padding-top: 4px; }
+  .head h1 { font-size: 22px; }
+  #fabs { top: 64px; right: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<aside id="panel" aria-label="おすすめスポット">
+  <button class="grab" id="grab" type="button" aria-label="パネルを開閉"></button>
+  <div class="head">
+    <h1>今日<em>どこ</em>走る?</h1>
+    <p id="status">天気を取得中…</p>
+  </div>
+  <div class="search">
+    <input type="search" id="q" placeholder="スポット名・地名で検索(例: 天橋立、箱根)" autocomplete="off" enterkeyhint="search" aria-label="検索">
+    <div id="qRes" hidden></div>
+  </div>
+  <div class="row chips days" id="dayChips">
+    <button type="button" data-day="0" class="on">今日</button>
+    <button type="button" data-day="1">明日</button>
+    <button type="button" data-day="2">明後日</button>
+  </div>
+  <div class="row chips scroll-x" id="tagChips"></div>
+  <details class="more">
+    <summary>距離・表示の条件</summary>
+    <div class="seg"><button type="button" class="on">バイク</button><button type="button" disabled>車(準備中)</button></div>
+    <label class="field">現在地からの距離(下限)
+      <select id="fMin">
+        <option value="0" selected>下限なし</option><option value="10">10km以上</option><option value="20">20km以上</option>
+        <option value="30">30km以上</option><option value="50">50km以上</option><option value="100">100km以上</option>
+      </select>
+    </label>
+    <label class="field">現在地からの距離(上限)
+      <select id="fRadius">
+        <option value="0">上限なし</option><option value="30">30km以内</option><option value="50">50km以内</option>
+        <option value="100" selected>100km以内</option><option value="150">150km以内</option><option value="200">200km以内</option><option value="300">300km以内</option>
+      </select>
+    </label>
+    <p class="small warn-text" id="rangeWarn" hidden>下限が上限以上になっています。範囲を見直してください。</p>
+    <label class="chk"><input type="checkbox" id="fPark" checked> みんなが投稿した駐車場を表示</label>
+    <p class="small" id="locStatus" style="margin:6px 0 0;">現在地は未取得です。📍を押すと、現在地からの距離を表示します</p>
+    <p class="small" id="myCount" style="margin:2px 0 0;"></p>
+  </details>
+  <div class="scroll">
+    <div id="areaChip" class="areachip" hidden><span>🗺️ 地図で選んだ範囲を表示中(距離は現在地から)</span><button type="button" id="areaClear">解除</button></div>
+    <div id="list"></div>
+    <p class="small">地図: OpenFreeMap / OpenStreetMap、国土地理院(地名検索も)。天気: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a>。スポットの位置・内容は未確認の目安です。走行前に最新の情報を確認し、安全運転で。</p>
+  </div>
+</aside>
+
+<button id="reSearch" type="button" hidden>🔎 このエリアで探す</button>
+
+<div id="fabs">
+  <button class="fab" id="acctBtn" type="button" aria-label="アカウント" title="アカウント">👤</button>
+  <div id="acctMenu" hidden></div>
+  <button class="fab" id="themeBtn" type="button" aria-label="表示テーマを切り替え" title="表示テーマ">🌗</button>
+  <button class="fab" id="locate" type="button" aria-label="現在地を取得">📍</button>
+  <button class="fab primary" id="fabAdd" type="button" aria-label="投稿する">＋</button>
+  <div id="addMenu" hidden>
+    <button class="btn" id="addSpot" type="button">ツーリングスポット</button>
+    <button class="btn ghost" id="addPark" type="button">駐車場</button>
+  </div>
+</div>
+
+<div id="mode" hidden>地図をタップして場所を選んでください <button id="cancelAdd" type="button">やめる</button></div>
+
+<div id="modal" hidden>
+  <div class="modal-card">
+    <form id="spotForm" hidden>
+      <h2>スポットを投稿</h2>
+      <label class="field">名前<input type="text" id="sName" required maxlength="60" placeholder="例: ○○展望台"></label>
+      <label class="field">場所(市町村など)<input type="text" id="sArea" maxlength="40" placeholder="例: 南丹市"></label>
+      <div class="small">特徴(いくつでも)</div>
+      <div id="sTags"></div>
+      <label class="field">メモ<textarea id="sNote" rows="2" maxlength="200" placeholder="例: 朝は空いている。道が狭い"></textarea></label>
+      <label class="field">写真(任意)<input type="file" id="sFile" accept="image/jpeg,image/png,image/webp"></label>
+      <label class="chk" style="align-items:flex-start;"><input type="checkbox" id="sOk"> <span>写真を付ける場合: 自分で撮影した写真で、人の顔・ナンバープレート・個人宅が写っていません。このアプリ上での表示に同意します。</span></label>
+      <p class="small">ナンバープレート・個人宅・私有地が特定できる情報は書かないでください。承認されると全員の地図に表示されます。</p>
+      <div class="actions"><button class="btn" type="submit">投稿する</button><button class="btn ghost" type="button" id="cancelSpotForm">キャンセル</button></div>
+    </form>
+    <form id="ratingForm" hidden>
+      <h2>スポットを評価</h2>
+      <p class="small" id="ratingTarget" style="margin:0 0 6px;"></p>
+      <div id="ratingRows"></div>
+      <p class="small">つけたい項目だけで大丈夫です。あとから変更できます(1人1スポットにつき1回分)。</p>
+      <div class="actions"><button class="btn" type="submit" id="rateSubmit">評価を送る</button><button class="btn ghost" type="button" id="cancelRating">キャンセル</button></div>
+    </form>
+    <form id="photoForm" hidden>
+      <h2>写真を投稿</h2>
+      <p class="small" id="photoTarget" style="margin:0 0 8px;"></p>
+      <label class="field">写真<input type="file" id="phFile" accept="image/jpeg,image/png,image/webp" required></label>
+      <label class="field">ひとこと(任意)<input type="text" id="phCap" maxlength="100" placeholder="例: 朝7時、ほぼ貸切でした"></label>
+      <label class="chk" style="align-items:flex-start;"><input type="checkbox" id="phOk" required> <span>自分で撮影した写真です。人の顔・ナンバープレート・個人宅が写っていません。このアプリ上での表示に同意します。</span></label>
+      <p class="small">位置情報などの撮影データは、アップロード前に取り除きます。承認されると全員に表示されます。</p>
+      <div class="actions"><button class="btn" type="submit" id="phSubmit">投稿する</button><button class="btn ghost" type="button" id="cancelPhoto">キャンセル</button></div>
+    </form>
+    <form id="parkForm" hidden>
+      <h2>駐車場を投稿</h2>
+      <label class="field">名前<input type="text" id="pName" required maxlength="60" placeholder="例: ○○道の駅 二輪駐車場"></label>
+      <label class="field">停められるバイク
+        <select id="pCls"><option value="">不明</option><option value="50">原付</option><option value="125">〜125cc</option><option value="250">〜250cc</option><option value="999">大型OK</option></select>
+      </label>
+      <label class="field">料金<input type="text" id="pFee" maxlength="60" placeholder="例: 無料 / 1日300円"></label>
+      <label class="chk"><input type="checkbox" id="pRoof"> 屋根あり</label>
+      <label class="field">メモ<textarea id="pNote" rows="2" maxlength="200" placeholder="例: 入口が狭い、夜は閉まる"></textarea></label>
+      <p class="small">ナンバープレート・個人宅・私有地が特定できる情報は書かないでください。承認されると全員の地図に表示されます。</p>
+      <div class="actions"><button class="btn" type="submit">投稿する</button><button class="btn ghost" type="button" id="cancelForm">キャンセル</button></div>
+    </form>
+  </div>
+</div>
+<div id="toast" hidden></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="data.js"></script>
+<script>
+
+// ---- 設定 ----
+const SUPABASE_URL = "https://gvihfhsoywuneeulcyok.supabase.co";
+const SUPABASE_KEY = "sb_publishable_FUj_oS1hCAmfDP_wRfTzyQ_c2x1G6r1"; // 公開用キー(権限はDB側のRLSで制限済み)
+const STORE_KEY = "touring.parks.v1";
+const CLASS_LABEL = { 50: "原付", 125: "〜125cc", 250: "〜250cc", 999: "大型OK" };
+const WEATHER_TEXT = c => c === 0 ? "快晴" : c <= 3 ? "晴れ〜曇り" : c <= 48 ? "霧・曇り" : c <= 67 ? "雨" : c <= 77 ? "雪" : c <= 82 ? "にわか雨" : c <= 86 ? "雪" : "雷雨";
+
+// ---- 乗り物ごとの判断(車を足すときは VEHICLES.car を追加) ----
+const VEHICLES = {
+  bike: {
+    label: "バイク",
+    // 0〜100点。雨・強風・暑さ寒さ・雷を重く見る
+    score(w) {
+      let s = 100, notes = [];
+      s -= w.pop * 0.8;                       if (w.pop >= 50) notes.push("雨の可能性大");
+      if (w.wind > 6) { s -= (w.wind - 6) * 4; notes.push("風が強め"); }
+      if (w.tmax > 33) { s -= 15; notes.push("暑い"); }
+      if (w.tmin < 3)  { s -= 15; notes.push("路面凍結に注意"); }
+      if (w.code >= 95) { s -= 40; notes.push("雷の予報"); }
+      return { score: Math.max(0, Math.round(s)), notes };
+    }
+  }
+};
+let vehicle = "bike";
+let userPos = null, meMarker = null;
+const state = { day: 0, tag: "" };
+let area = null;   // 「このエリアで探す」で指定した地図の範囲。指定中は距離の条件より優先する
+const km = (a, b) => {
+  const R = 6371, rad = x => x * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+
+// ---- 地図 ----
+const map = L.map("map", { zoomControl: false }).setView([35.2, 135.6], 9);
+const gsiAttr = '<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a>';
+const ofmAttr = '<a href="https://openfreemap.org" target="_blank" rel="noopener noreferrer">OpenFreeMap</a> © <a href="https://openmaptiles.org/" target="_blank" rel="noopener noreferrer">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>';
+const ofm = name => !L.maplibreGL ? L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", { maxZoom: 18, attribution: gsiAttr }) : L.maplibreGL({ style: "https://tiles.openfreemap.org/styles/" + name, attribution: ofmAttr });
+const base = {
+  "カラフル(Liberty)": ofm("liberty"),
+  "すっきり(Positron)": ofm("positron"),
+  "Bright": ofm("bright"),
+  "ダーク": ofm("dark"),
+  "国土地理院 淡色": L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", { maxZoom: 18, attribution: gsiAttr }),
+  "国土地理院 写真": L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", { maxZoom: 18, attribution: gsiAttr })
+};
+base["カラフル(Liberty)"].addTo(map);
+L.control.layers(base, null, { position: "topright" }).addTo(map);
+map.on("baselayerchange", e => { if (!swapping) { baseAuto = false; currentBaseName = e.name; } });
+// ---- テーマ(自動: 18時〜翌6時はダーク / ライト / ダーク) ----
+const THEME_KEY = "touring.theme.v1";
+const THEME_ORDER = ["auto", "light", "dark"];
+let themePref = "auto";
+try { const v = localStorage.getItem(THEME_KEY); if (THEME_ORDER.includes(v)) themePref = v; } catch (e) {}
+let currentBaseName = "カラフル(Liberty)", baseAuto = true, swapping = false;
+function effectiveTheme() {
+  if (themePref !== "auto") return themePref;
+  const hr = new Date().getHours();
+  return (hr >= 18 || hr < 6) ? "dark" : "light";
+}
+function applyTheme() {
+  const t = effectiveTheme();
+  document.documentElement.dataset.theme = t;
+  $("themeBtn").textContent = themePref === "auto" ? "🌗" : themePref === "light" ? "☀️" : "🌙";
+  // 地図も合わせる(利用者が右上のボタンで地図の種類を選んだあとは、そちらを優先する)
+  if (baseAuto) {
+    const target = t === "dark" ? "ダーク" : "カラフル(Liberty)";
+    if (target !== currentBaseName && base[target] && base[currentBaseName]) {
+      swapping = true;
+      map.removeLayer(base[currentBaseName]); base[target].addTo(map); currentBaseName = target;
+      swapping = false;
+    }
+  }
+}
+const spotLayer = L.layerGroup().addTo(map);
+const parkLayer = L.layerGroup().addTo(map);
+const scoreColor = s => s == null ? "#7b8794" : s >= 80 ? "#12a150" : s >= 55 ? "#e0a100" : "#d64545";
+const WEATHER_ICON = c => c === 0 ? "☀️" : c <= 3 ? "⛅" : c <= 48 ? "🌫️" : c <= 67 ? "🌧️" : c <= 77 ? "❄️" : c <= 82 ? "🌦️" : c <= 86 ? "❄️" : "⛈️";
+const pin = (kind, label, color) => L.divIcon({ className: "", html: `<div class="pin ${kind}" style="--c:${color || ""}">${esc(label)}</div>`, iconSize: [38, 30], iconAnchor: [19, 15] });
+
+const navLinks = (lat, lng, name) => `<br><a href="https://maps.apple.com/?ll=${lat},${lng}&q=${encodeURIComponent(name)}" target="_blank" rel="noopener noreferrer">Appleマップで開く</a> / <a href="https://www.google.com/maps/search/?api=1&query=${lat},${lng}" target="_blank" rel="noopener noreferrer">Googleマップ</a>`;
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const $ = id => document.getElementById(id);
+
+// ---- 天気(Open-Meteo)。スポットが多いので、現在地に近い最大40件だけ取得し、1時間キャッシュする ----
+const WX_KEY = "touring.wx.v1", WX_TTL = 60 * 60 * 1000, WX_MAX = 40;
+let wxCache = {};
+try { wxCache = JSON.parse(localStorage.getItem(WX_KEY) || "{}"); } catch (e) { wxCache = {}; }
+let wxBusy = false, wxAgain = false, wxTimer = null;
+function loadWeatherSoon() { clearTimeout(wxTimer); wxTimer = setTimeout(loadWeather, 400); }
+async function loadWeather() {
+  if (wxBusy) { wxAgain = true; return; }
+  wxBusy = true;
+  try {
+    const c = map.getCenter(), origin = userPos || { lat: c.lat, lng: c.lng };
+    const maxKm = Number($("fRadius").value) || Infinity, minKm = Number($("fMin").value);
+    const A = allSpots(), view = map.getBounds().pad(0.2);
+    // 地図に見えている範囲のスポット + 現在地(なければ地図の中心)に近いスポット
+    const inView = A.filter(s => view.contains([s.lat, s.lng])).slice(0, 100);
+    const near = area ? [] : A.map(s => ({ s, d: km(origin, s) })).filter(x => x.d <= maxKm && x.d >= minKm)
+      .sort((a, b) => a.d - b.d).slice(0, WX_MAX).map(x => x.s);
+    const cand = [...new Map(inView.concat(near).map(s => [s.id, s])).values()].slice(0, 100);
+    const now = Date.now();
+    const need = cand.filter(s => !(wxCache[s.id] && now - wxCache[s.id].t < WX_TTL));
+    if (need.length) {
+      const url = "https://api.open-meteo.com/v1/forecast?latitude=" + need.map(s => s.lat).join(",") + "&longitude=" + need.map(s => s.lng).join(",") +
+        "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max" +
+        "&wind_speed_unit=ms&timezone=Asia%2FTokyo&forecast_days=3";
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(r.status);
+      const j = await r.json(), arr = Array.isArray(j) ? j : [j];
+      need.forEach((s, i) => { if (arr[i] && arr[i].daily) wxCache[s.id] = { t: now, daily: arr[i].daily }; });
+      try { localStorage.setItem(WX_KEY, JSON.stringify(wxCache)); } catch (e) {}
+    }
+    $("status").textContent = "見えている範囲と近くのスポットを、最新の天気予報で並べています";
+  } catch (e) {
+    $("status").textContent = "天気を取得できませんでした。通信を確認してください";
+  }
+  wxBusy = false;
+  render();
+  if (wxAgain) { wxAgain = false; loadWeather(); }
+}
+function wAt(s, day) {
+  const e = wxCache[s.id];
+  if (!e || !e.daily) return null;
+  const d = e.daily;
+  return { code: d.weather_code[day], tmax: d.temperature_2m_max[day], tmin: d.temperature_2m_min[day],
+           pop: d.precipitation_probability_max[day] ?? 0, wind: d.wind_speed_10m_max[day] };
+}
+
+// ---- スポット表示 ----
+const CRITERIA = [["scenery", "景色", "景色"], ["road", "道の走りやすさ", "道"], ["food", "ご飯・休憩", "ご飯"], ["parking", "バイクの停めやすさ", "駐車"], ["quiet", "空いている", "空き"]];
+function ratingAvg(rt) {
+  if (!rt) return null;
+  const v = CRITERIA.map(c => Number(rt[c[0]])).filter(x => Number.isFinite(x) && x > 0);
+  return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length * 10) / 10 : null;
+}
+function spotPopup(s, w, res, dist) {
+  const rows = [`<b>${esc(s.name)}</b> <small>${esc(s.area)}${dist != null ? " / 現在地から約" + Math.round(dist) + "km(直線)" : ""}</small>`];
+  if (w) rows.push(`${WEATHER_TEXT(w.code)} / ${Math.round(w.tmin)}〜${Math.round(w.tmax)}℃ / 降水確率 ${w.pop}% / 風 ${Math.round(w.wind)}m/s`,
+                    `走りやすさ: <b>${res.score}点</b>${res.notes.length ? "(" + esc(res.notes.join("・")) + ")" : ""}`);
+  else rows.push("天気: 取得できていません");
+  const rt = ratingsBySpot[s.id], ra = ratingAvg(rt);
+  rows.push(ra != null ? `<span class="stars-s">★ ${ra.toFixed(1)}</span> <small>(${rt.n}人)・${CRITERIA.map(c => c[2] + (rt[c[0]] != null ? Number(rt[c[0]]).toFixed(1) : "–")).join(" ")}</small>` : `<small>まだ評価がありません</small>`);
+  const phs = photosBySpot[s.id] || [];
+  if (phs.length) rows.push(`<div class="pstrip">${phs.slice(0, 8).map(p => `<div class="ph${p.status !== "approved" ? " wait" : ""}"><img loading="lazy" src="${esc(photoUrl(p.path))}" alt="${esc(s.name)}の写真${p.caption ? "(" + esc(p.caption) + ")" : ""}">` +
+    `${p.status !== "approved" ? '<span class="pw">承認待ち</span>' : ""}${p.mine ? `<button class="pdel" data-delphoto="${esc(p.id)}" data-path="${esc(p.path)}" aria-label="この写真を削除">✕</button>` : ""}</div>`).join("")}</div>`);
+  if (s.bike && s.bike.note) rows.push(`<small>${esc(s.bike.note)}</small>`);
+  if (s.unverified) rows.push(s.user ? `<small>ユーザー投稿(未確認)/ ${esc(s.createdAt || "")}</small>` : `<small>※位置・内容は未確認の目安です</small>`);
+  if (s.user) rows.push(`<button class="danger" data-delspot="${esc(s.id)}">削除</button>`);
+  if (s.fromUser && s.pending) rows.push(`<small>承認待ち(投稿したあなたにだけ表示されています)</small>`);
+  if (s.fromUser && s.mine) rows.push(`<button class="danger" data-delremote="spots" data-dbid="${esc(s.dbId)}">この投稿を削除</button>`);
+  rows.push(`<button class="pbtn" data-rate="${esc(s.id)}" data-rname="${esc(s.name)}">⭐ 評価する</button> <button class="pbtn" data-photo="${esc(s.id)}" data-pname="${esc(s.name)}">📷 写真を投稿</button>` + ` <button class="rep" data-report="${esc(s.id)}" data-rtype="${s.fromUser ? "spot" : "spot"}">🚩 通報</button>`);
+  return `<div class="pop">${rows.join("<br>")}${navLinks(s.lat, s.lng, s.name)}</div>`;
+}
+function render() {
+  const mn = Number($("fMin").value), mx = Number($("fRadius").value);
+  $("rangeWarn").hidden = !(mx && mn >= mx);
+  $("areaChip").hidden = !area;
+  const radius = Number($("fRadius").value), minKm = Number($("fMin").value), day = state.day, tag = state.tag, V = VEHICLES[vehicle];
+  spotLayer.clearLayers();
+  const list = $("list"); list.innerHTML = "";
+  const rows = allSpots().map(s => {
+    const w = wAt(s, day);
+    return { s, w, res: w ? V.score(w) : { score: null, notes: [] }, dist: userPos ? km(userPos, s) : null };
+  }).filter(r => r.s.vehicles.includes(vehicle) && (!tag || r.s.tags.includes(tag)) &&
+                 (area ? area.contains([r.s.lat, r.s.lng]) : (!userPos || ((!radius || r.dist <= radius) && r.dist >= minKm))));
+  rows.sort((a, b) => ((b.res.score ?? -1) - (a.res.score ?? -1)) || ((a.dist ?? 0) - (b.dist ?? 0)));
+  rows.forEach(({ s, w, res, dist }, idx) => {
+    const m = L.marker([s.lat, s.lng], { icon: pin("spot", res.score == null ? "–" : res.score, scoreColor(res.score)) }).bindPopup(spotPopup(s, w, res, dist), { maxWidth: 300 }).addTo(spotLayer);
+    const div = document.createElement("div");
+    div.className = "card";
+    const ring = res.score == null ? "" : `--p:${res.score};`;
+    div.innerHTML =
+      `<div class="ring" style="${ring}--c:${scoreColor(res.score)}"><span>${res.score == null ? "–" : res.score}</span></div>` +
+      `<div class="cbody"><div class="ctitle">${idx === 0 && res.score != null ? '<span class="best">いちおし</span>' : ""}${esc(s.name)}</div>` +
+      `<div class="cmeta">${w ? WEATHER_ICON(w.code) + " " + WEATHER_TEXT(w.code) + "・降水" + w.pop + "%・" + Math.round(w.tmax) + "℃" : "天気を取得中"}` +
+      `${dist != null ? "・" + Math.round(dist) + "km" : ""}・${esc(s.area)}${ratingAvg(ratingsBySpot[s.id]) != null ? `・<span class="stars-s">★${ratingAvg(ratingsBySpot[s.id]).toFixed(1)}</span>` : ""}</div>` +
+      `<div class="ctags">${s.tags.map(t => `<span class="tag">${esc(t)}</span>`).join("")}${res.notes.map(n => `<span class="tag warn">${esc(n)}</span>`).join("")}</div></div>` +
+      ((photosBySpot[s.id] || [])[0] ? `<img class="thumb" loading="lazy" alt="" src="${esc(photoUrl(photosBySpot[s.id][0].path))}">` : "");
+    const cam = document.createElement("button");
+    cam.type = "button"; cam.className = "cam"; cam.textContent = "📷"; cam.title = "このスポットに写真を投稿"; cam.setAttribute("aria-label", s.name + "に写真を投稿");
+    cam.onclick = ev => { ev.stopPropagation(); openPhotoForm(s); };
+    div.appendChild(cam);
+    div.onclick = () => { map.setView([s.lat, s.lng], 12); m.openPopup(); if (window.innerWidth <= 720) $("panel").classList.add("peek"); };
+    list.appendChild(div);
+  });
+  if (!rows.length) list.innerHTML = `<p class="empty">${userPos && (radius || minKm) ? "この距離の範囲にスポットがありません。範囲を広げてみてください。" : "該当するスポットがありません。"}</p>`;
+  renderParks();
+}
+
+// ---- ユーザー投稿の駐車場(いまは端末内のみ) ----
+const SPOT_KEY = "touring.spots.v1";
+const TAGS = ["景色", "山道", "海", "ご飯", "観光"];
+function loadUserSpots() { try { return JSON.parse(localStorage.getItem(SPOT_KEY) || "[]"); } catch (e) { return []; } }
+function saveUserSpots(a) { try { localStorage.setItem(SPOT_KEY, JSON.stringify(a)); } catch (e) { alert("保存できませんでした(ブラウザの設定を確認してください)"); } }
+let remoteSpots = [], remoteParks = [], photosBySpot = {}, ratingsBySpot = {}, myRatings = {};
+const photoUrl = p => `${SUPABASE_URL}/storage/v1/object/public/spot-photos/${p}`;
+let sb = null;
+try { sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null; } catch (e) { sb = null; }
+let myId = null;
+async function ensureAuth() {          // ログイン不要の「匿名ログイン」。自分の投稿を、あとから自分だけが削除できるようにする
+  if (!sb) return;
+  try {
+    let { data } = await sb.auth.getSession();
+    if (!data.session) { const r = await sb.auth.signInAnonymously(); data = r.data; }
+    myId = data && data.session ? data.session.user.id : null;
+  } catch (e) { myId = null; }
+  await refreshAcct();
+}
+let acct = { google: false, name: "", avatar: "" };
+async function refreshAcct() {
+  if (!sb) return;
+  try {
+    const { data } = await sb.auth.getSession();
+    const u = data && data.session ? data.session.user : null;
+    myId = u ? u.id : null;
+    const meta = (u && u.user_metadata) || {};
+    acct = { google: !!u && !u.is_anonymous, name: meta.full_name || meta.name || (u && u.email) || "", avatar: meta.avatar_url || meta.picture || "" };
+  } catch (e) {}
+  drawAcct();
+}
+function drawAcct() {
+  const btn = $("acctBtn"), menu = $("acctMenu");
+  btn.innerHTML = "";
+  if (acct.google && acct.avatar) { const im = document.createElement("img"); im.alt = ""; im.referrerPolicy = "no-referrer"; im.src = acct.avatar; btn.appendChild(im); }
+  else btn.textContent = acct.google ? "🙂" : "👤";
+  menu.innerHTML = "";
+  const box = (html) => { const d = document.createElement("div"); d.innerHTML = html; menu.appendChild(d); };
+  if (acct.google) {
+    box(`<div class="small">ログイン中</div><div class="an"></div><div class="small">自分の投稿は、別の端末でもこのアカウントで管理できます。</div>`);
+    menu.querySelector(".an").textContent = acct.name || "Googleアカウント";
+    const b = document.createElement("button"); b.className = "btn ghost"; b.type = "button"; b.textContent = "ログアウト"; b.onclick = googleLogout; menu.appendChild(b);
+  } else {
+    box(`<div class="an">ゲスト</div><div class="small">Googleでログインすると、いまの投稿や評価を引き継いで、別の端末でも自分の投稿を管理できます。</div>`);
+    const b = document.createElement("button"); b.className = "btn"; b.type = "button"; b.textContent = "Googleでログイン"; b.onclick = googleLogin; menu.appendChild(b);
+  }
+}
+async function googleLogin() {
+  if (!sb) { toast("ログイン機能を読み込めませんでした"); return; }
+  if (location.protocol === "file:") { toast("Googleログインは、公開したURLかLive Serverで開いたときに使えます"); return; }
+  const redirectTo = location.origin + location.pathname;
+  try {   // まずは、いまのゲストにGoogleを結びつける(投稿を引き継げる)
+    const r = await sb.auth.linkIdentity({ provider: "google", options: { redirectTo } });
+    if (r.error) throw r.error;
+  } catch (e) {   // 結びつけられないとき(すでに別のアカウントに使われている等)は、通常のログイン
+    try { const r2 = await sb.auth.signInWithOAuth({ provider: "google", options: { redirectTo } }); if (r2.error) throw r2.error; }
+    catch (e2) { toast("Googleログインを始められませんでした"); }
+  }
+}
+async function googleLogout() {
+  try { await sb.auth.signOut(); await ensureAuth(); await refreshAcct(); await afterRemoteChange(); $("acctMenu").hidden = true; toast("ログアウトしました"); }
+  catch (e) { toast("ログアウトできませんでした"); }
+}
+async function hdr(extra) {
+  const h = { apikey: SUPABASE_KEY, "Content-Type": "application/json", ...(extra || {}) };
+  if (sb) { try { const { data } = await sb.auth.getSession(); if (data.session) h.Authorization = "Bearer " + data.session.access_token; } catch (e) {} }
+  return h;
+}
+async function sbGet(table) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*&order=created_at.desc&limit=1000`, { headers: await hdr() });
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+async function sbGet2(table) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*`, { headers: await hdr() });
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+async function sbUpsert(table, row, conflict) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?on_conflict=${conflict}`, { method: "POST", headers: await hdr({ Prefer: "resolution=merge-duplicates,return=minimal" }), body: JSON.stringify(row) });
+  if (!r.ok) throw new Error(r.status);
+}
+async function sbPost(table, row) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, { method: "POST", headers: await hdr({ Prefer: "return=minimal" }), body: JSON.stringify(row) });
+  if (!r.ok) throw new Error(r.status);
+}
+async function sbDelete(table, id) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, { method: "DELETE", headers: await hdr({ Prefer: "return=representation" }) });
+  if (!r.ok) throw new Error(r.status);
+  const rows = await r.json();
+  if (!rows.length) throw new Error("not-deleted");
+}
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 6000);
+}
+async function loadRemote() {
+  try {
+    const [s, p] = await Promise.all([sbGet("spots"), sbGet("parking")]);
+    remoteSpots = s.filter(x => x.status !== "rejected").map(x => ({ id: "r" + x.id, dbId: x.id, mine: !!myId && x.owner === myId, pending: x.status !== "approved", name: x.name, area: x.area || "ユーザー投稿", lat: x.lat, lng: x.lng, vehicles: ["bike"],
+      tags: x.tags || [], unverified: true, fromUser: true, bike: { note: x.note || "" }, createdAt: (x.created_at || "").slice(0, 10) }));
+    remoteParks = p.filter(x => x.status !== "rejected").map(x => ({ id: "r" + x.id, dbId: x.id, mine: !!myId && x.owner === myId, pending: x.status !== "approved", name: x.name, lat: x.lat, lng: x.lng, cls: x.cls, fee: x.fee, roof: x.roof, note: x.note,
+      createdAt: (x.created_at || "").slice(0, 10), remote: true }));
+  } catch (e) { toast("みんなの投稿を読み込めませんでした"); }
+  try {
+    const ph = await sbGet("photos");
+    photosBySpot = {};
+    ph.filter(x => x.status !== "rejected").forEach(x => { x.mine = !!myId && x.owner === myId; (photosBySpot[x.spot_id] = photosBySpot[x.spot_id] || []).push(x); });
+  } catch (e) { photosBySpot = {}; }
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/spot_ratings?select=*`, { headers: await hdr() });
+    if (!r.ok) throw new Error(r.status);
+    ratingsBySpot = {}; (await r.json()).forEach(x => { ratingsBySpot[x.spot_id] = x; });
+  } catch (e) { ratingsBySpot = {}; }
+  try {
+    myRatings = {}; if (myId) (await sbGet2("ratings")).forEach(x => { myRatings[x.spot_id] = x; });
+  } catch (e) { myRatings = {}; }
+}
+function allSpots() {
+  return SPOTS.concat(remoteSpots).concat(loadUserSpots().map(u => ({ id: u.id, name: u.name, area: u.area || "ユーザー投稿", lat: u.lat, lng: u.lng,
+    vehicles: ["bike"], tags: u.tags || [], unverified: true, user: true, bike: { note: u.note || "" }, createdAt: u.createdAt })));
+}
+function loadParks() { try { return JSON.parse(localStorage.getItem(STORE_KEY) || "[]"); } catch (e) { return []; } }
+function saveParks(a) { try { localStorage.setItem(STORE_KEY, JSON.stringify(a)); } catch (e) { alert("保存できませんでした(ブラウザの設定を確認してください)"); } }
+function renderParks() {
+  parkLayer.clearLayers();
+  const parks = loadParks().concat(remoteParks);
+  $("myCount").textContent = `みんなの投稿(承認済み): スポット${remoteSpots.length}件 / 駐車場${remoteParks.length}件`;
+  if (!$("fPark").checked) return;
+  parks.forEach(p => {
+    const html = `<div class="pop"><b>${esc(p.name)}</b> <small>(ユーザー投稿・未確認)</small><br>` +
+      `対応: ${p.cls ? CLASS_LABEL[p.cls] : "排気量は不明"}${p.roof ? " / 屋根あり" : ""}<br>料金: ${p.fee ? esc(p.fee) : "不明"}` +
+      (p.note ? `<br><small>${esc(p.note)}</small>` : "") +
+      `<br><small>${esc(p.createdAt)} 投稿</small>${navLinks(p.lat, p.lng, p.name)}${p.remote ? (p.pending ? "<br><small>承認待ち(投稿したあなたにだけ表示されています)</small>" : "") + (p.mine ? `<br><button class="danger" data-delremote="parking" data-dbid="${esc(p.dbId)}">この投稿を削除</button>` : `<br><button class="rep" data-report="${esc(p.id)}" data-rtype="parking">🚩 通報</button>`) : `<br><button class="danger" data-del="${esc(p.id)}">削除</button>`}</div>`;
+    L.marker([p.lat, p.lng], { icon: pin("park", "P") }).bindPopup(html).addTo(parkLayer);
+  });
+}
+let photoSpot = null;
+function openPhotoForm(s) { photoSpot = { id: s.id, name: s.name }; $("photoTarget").textContent = "投稿先: " + s.name; map.closePopup(); showForm("photo"); }
+async function resizeToJpeg(file, maxSide = 1280) {
+  const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const k = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+  const cv = document.createElement("canvas");
+  cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+  cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);   // 再描画するので撮影位置などのEXIFは残らない
+  return new Promise((ok, ng) => cv.toBlob(b => b ? ok(b) : ng(new Error("blob")), "image/jpeg", 0.82));
+}
+$("cancelPhoto").onclick = () => { hideForms(); };
+async function uploadPhoto(spotId, file, caption) {
+  if (!sb) throw new Error("no-sb");
+  const blob = await resizeToJpeg(file);
+  const path = `${spotId}/${crypto.randomUUID()}.jpg`;
+  const up = await sb.storage.from("spot-photos").upload(path, blob, { contentType: "image/jpeg" });
+  if (up.error) throw up.error;
+  await sbPost("photos", { spot_id: spotId, path, caption: caption || null });
+}
+$("photoForm").onsubmit = async e => {
+  e.preventDefault();
+  const f = $("phFile").files[0];
+  if (!f || !photoSpot) return;
+  $("phSubmit").disabled = true;
+  try {
+    await uploadPhoto(photoSpot.id, f, $("phCap").value.trim());
+    e.target.reset(); hideForms();
+    toast("写真を受け付けました。承認されるまで、あなたにだけ表示されます。"); afterRemoteChange();
+  } catch (err) { toast("写真を投稿できませんでした"); }
+  $("phSubmit").disabled = false;
+};
+let rateSpot = null, rateVals = {};
+function drawRatingRows() {
+  const box = $("ratingRows"); box.innerHTML = "";
+  CRITERIA.forEach(([key, label]) => {
+    const row = document.createElement("div"); row.className = "rrow";
+    const t = document.createElement("span"); t.textContent = label; row.appendChild(t);
+    const st = document.createElement("div"); st.className = "stars";
+    for (let i = 1; i <= 5; i++) {
+      const b = document.createElement("button"); b.type = "button"; b.textContent = "★"; b.setAttribute("aria-label", label + " " + i);
+      if ((rateVals[key] || 0) >= i) b.classList.add("on");
+      b.onclick = () => { rateVals[key] = (rateVals[key] === i) ? 0 : i; drawRatingRows(); };   // 同じ星をもう一度押すと取り消し
+      st.appendChild(b);
+    }
+    row.appendChild(st); box.appendChild(row);
+  });
+}
+function openRating(s) {
+  rateSpot = { id: s.id, name: s.name };
+  const mine = myRatings[s.id] || {};
+  rateVals = {}; CRITERIA.forEach(([k]) => { rateVals[k] = Number(mine[k]) || 0; });
+  $("ratingTarget").textContent = "評価する場所: " + s.name;
+  drawRatingRows(); map.closePopup(); showForm("rating");
+}
+$("cancelRating").onclick = hideForms;
+$("ratingForm").onsubmit = async e => {
+  e.preventDefault();
+  if (!rateSpot) return;
+  if (!CRITERIA.some(([k]) => rateVals[k] > 0)) { toast("星を1つ以上つけてください"); return; }
+  if (!myId) { toast("評価するには、ページを開き直してください(準備中)"); return; }
+  const row = { spot_id: rateSpot.id, updated_at: new Date().toISOString() };
+  CRITERIA.forEach(([k]) => { row[k] = rateVals[k] > 0 ? rateVals[k] : null; });
+  $("rateSubmit").disabled = true;
+  try { await sbUpsert("ratings", row, "spot_id,owner"); hideForms(); toast("評価を送りました。ありがとうございます"); afterRemoteChange(); }
+  catch (err) { toast("評価を送れませんでした"); }
+  $("rateSubmit").disabled = false;
+};
+async function afterRemoteChange() { await loadRemote(); render(); renderParks(); loadWeatherSoon(); }
+map.on("popupopen", e => {
+  const el = e.popup.getElement();
+  const rb = el.querySelector("[data-rate]");
+  if (rb) rb.onclick = () => openRating({ id: rb.dataset.rate, name: rb.dataset.rname });
+  const dr = el.querySelector("[data-delremote]");
+  if (dr) dr.onclick = async () => {
+    if (dr.dataset.armed !== "1") { dr.dataset.armed = "1"; dr.textContent = "本当に削除する(もう一度押す)"; return; }
+    try { await sbDelete(dr.dataset.delremote, dr.dataset.dbid); map.closePopup(); toast("削除しました"); afterRemoteChange(); }
+    catch (err) { toast("削除できませんでした"); }
+  };
+  el.querySelectorAll("[data-delphoto]").forEach(b => b.onclick = async () => {
+    if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "削除?"; return; }
+    try { await sbDelete("photos", b.dataset.delphoto); if (sb) await sb.storage.from("spot-photos").remove([b.dataset.path]); map.closePopup(); toast("写真を削除しました"); afterRemoteChange(); }
+    catch (err) { toast("削除できませんでした"); }
+  });
+  el.querySelectorAll("[data-report]").forEach(b => b.onclick = async () => {
+    try { await sbPost("reports", { target_type: b.dataset.rtype, target_id: b.dataset.report, reason: "利用者からの通報" }); b.disabled = true; b.textContent = "通報しました"; toast("通報を受け付けました。確認します"); }
+    catch (err) { toast("通報できませんでした"); }
+  });
+  const pb = e.popup.getElement().querySelector("[data-photo]");
+  if (pb) pb.onclick = () => { photoSpot = { id: pb.dataset.photo, name: pb.dataset.pname }; $("photoTarget").textContent = "投稿先: " + photoSpot.name; map.closePopup(); showForm("photo"); };
+  const b = e.popup.getElement().querySelector("[data-del]");
+  if (b) b.onclick = () => { saveParks(loadParks().filter(p => p.id !== b.dataset.del)); map.closePopup(); renderParks(); };
+  const d = e.popup.getElement().querySelector("[data-delspot]");
+  if (d) d.onclick = () => { saveUserSpots(loadUserSpots().filter(s => s.id !== d.dataset.delspot)); map.closePopup(); render(); loadWeather(); };
+});
+
+let adding = false, addKind = "park", picked = null, pickMarker = null;
+function setAdding(on) {
+  adding = on; $("mode").hidden = !on;
+  map.getContainer().style.cursor = on ? "crosshair" : "";
+}
+function hideForms() { $("parkForm").hidden = true; $("spotForm").hidden = true; $("photoForm").hidden = true; $("ratingForm").hidden = true; $("modal").hidden = true; }
+function showForm(kind) {
+  $("modal").hidden = false; $("parkForm").hidden = kind !== "park"; $("spotForm").hidden = kind !== "spot"; $("photoForm").hidden = kind !== "photo"; $("ratingForm").hidden = kind !== "rating";
+  if (kind === "spot") $("sName").focus(); else if (kind === "park") $("pName").focus();
+}
+function startAdd(kind) { hideForms(); $("addMenu").hidden = true; addKind = kind; setAdding(true); if (window.innerWidth <= 720) $("panel").classList.add("peek"); }
+$("addSpot").onclick = () => startAdd("spot");
+$("addPark").onclick = () => startAdd("park");
+$("fabAdd").onclick = () => { $("addMenu").hidden = !$("addMenu").hidden; };
+$("sTags").innerHTML = TAGS.map(t => `<label class="chk"><input type="checkbox" name="sTag" value="${t}"> ${t}</label>`).join("");
+const cancelPick = () => { hideForms(); if (pickMarker) { map.removeLayer(pickMarker); pickMarker = null; } };
+$("cancelSpotForm").onclick = cancelPick;
+$("cancelForm").onclick = cancelPick;
+$("cancelAdd").onclick = () => setAdding(false);
+map.on("click", e => {
+  if (!adding) return;
+  picked = e.latlng;
+  if (pickMarker) pickMarker.setLatLng(picked); else pickMarker = L.circleMarker(picked, { radius: 9, color: "#c0392b" }).addTo(map);
+  setAdding(false); showForm(addKind);
+});
+$("parkForm").onsubmit = async e => {
+  e.preventDefault();
+  if (!picked) return;
+  const name = $("pName").value.trim();
+  if (!name) return;
+  const row = { name, lat: +picked.lat.toFixed(5), lng: +picked.lng.toFixed(5),
+    cls: $("pCls").value ? Number($("pCls").value) : null, fee: $("pFee").value.trim() || null, roof: $("pRoof").checked,
+    note: $("pNote").value.trim() || null };
+  try { await sbPost("parking", row); } catch (err) { toast("投稿できませんでした(通信を確認してください)"); return; }
+  e.target.reset(); hideForms();
+  if (pickMarker) { map.removeLayer(pickMarker); pickMarker = null; }
+  toast("投稿を受け付けました。承認されるまで、あなたにだけ表示されます。"); afterRemoteChange();
+};
+$("spotForm").onsubmit = async e => {
+  e.preventDefault();
+  if (!picked) return;
+  const name = $("sName").value.trim();
+  if (!name) return;
+  const file = $("sFile").files[0];
+  if (file && !$("sOk").checked) { toast("写真を付けるときは、確認のチェックを入れてください"); return; }
+  const id = crypto.randomUUID();
+  const row = { id, name, area: $("sArea").value.trim() || null, lat: +picked.lat.toFixed(5), lng: +picked.lng.toFixed(5),
+    tags: [...document.querySelectorAll('input[name="sTag"]:checked')].map(c => c.value), note: $("sNote").value.trim() || null };
+  const btn = e.target.querySelector('button[type="submit"]'); btn.disabled = true;
+  try { await sbPost("spots", row); } catch (err) { toast("投稿できませんでした(通信を確認してください)"); btn.disabled = false; return; }
+  let photoOk = true;
+  if (file) { try { await uploadPhoto("r" + id, file, ""); } catch (err) { photoOk = false; } }
+  btn.disabled = false;
+  e.target.reset(); hideForms();
+  if (pickMarker) { map.removeLayer(pickMarker); pickMarker = null; }
+  toast(photoOk ? "投稿を受け付けました。承認されるまで、あなたにだけ表示されます。" : "スポットは受け付けました。写真は投稿できなかったので、あとから追加してください。");
+  afterRemoteChange();
+};
+function centerOn(pos, zoom) {   // パネルに隠れない位置(見えている地図の中央)に来るようにずらして移動する
+  map.setView(pos, zoom, { animate: false });
+  if (window.innerWidth > 720) map.panBy([-Math.round(($("panel").offsetWidth + 16) / 2), 0], { animate: false });
+  else map.panBy([0, Math.round($("panel").offsetHeight / 2)], { animate: false });
+}
+function setOrigin(pos, label) {  // 距離の基準点(現在地のみ)
+  userPos = pos;
+  if (meMarker) meMarker.setLatLng(pos);
+  else meMarker = L.circleMarker(pos, { radius: 9, color: "#fff", weight: 3, fillColor: "#2b6cff", fillOpacity: 1 }).addTo(map);
+  meMarker.unbindTooltip(); meMarker.bindTooltip(label);
+  $("locStatus").textContent = "距離はすべて" + label + "からの直線距離です";
+}
+function locate(silent) {
+  if (!navigator.geolocation) { if (!silent) $("locStatus").textContent = "この端末は位置情報に対応していません"; return; }
+  $("locStatus").textContent = "現在地を取得中…";
+  navigator.geolocation.getCurrentPosition(p => {
+    area = null;
+    setOrigin({ lat: p.coords.latitude, lng: p.coords.longitude }, "現在地");
+    centerOn(userPos, 10);
+    if (!silent) toast("現在地から近い順の距離を表示します");
+    render(); loadWeatherSoon();
+  }, err => {
+    $("locStatus").textContent = err.code === 1 ? "位置情報が許可されていません。📍ボタンかブラウザの設定で許可してください" : "現在地を取得できませんでした";
+    if (!silent) toast("現在地を取得できませんでした");
+  }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
+}
+$("locate").onclick = () => locate(false);
+["fPark", "fRadius", "fMin"].forEach(id => $(id).addEventListener("change", () => { if (id !== "fPark") area = null; render(); if (id !== "fPark") { loadWeatherSoon(); updateReSearch(); } }));
+document.querySelectorAll("#dayChips button").forEach(b => b.onclick = () => {
+  state.day = Number(b.dataset.day);
+  document.querySelectorAll("#dayChips button").forEach(x => x.classList.toggle("on", x === b)); render();
+});
+$("tagChips").innerHTML = ["", ...TAGS].map(t => `<button type="button" data-tag="${t}" class="${t === "" ? "on" : ""}">${t || "すべて"}</button>`).join("");
+document.querySelectorAll("#tagChips button").forEach(b => b.onclick = () => {
+  state.tag = b.dataset.tag;
+  document.querySelectorAll("#tagChips button").forEach(x => x.classList.toggle("on", x === b)); render();
+});
+$("grab").onclick = () => $("panel").classList.toggle("peek");
+$("acctBtn").onclick = () => { $("acctMenu").hidden = !$("acctMenu").hidden; };
+document.addEventListener("click", e => { if (!e.target.closest("#acctMenu") && !e.target.closest("#acctBtn")) $("acctMenu").hidden = true; });
+if (sb) sb.auth.onAuthStateChange(() => { setTimeout(async () => { await refreshAcct(); afterRemoteChange(); }, 0); });
+$("themeBtn").onclick = () => {
+  themePref = THEME_ORDER[(THEME_ORDER.indexOf(themePref) + 1) % 3];
+  try { localStorage.setItem(THEME_KEY, themePref); } catch (e) {}
+  baseAuto = true;   // ボタンで切り替えたら、地図もテーマに合わせ直す
+  applyTheme();
+  toast(themePref === "auto" ? "表示: 自動(18時〜翌6時はダーク)" : themePref === "light" ? "表示: ライト" : "表示: ダーク");
+};
+applyTheme();
+setInterval(applyTheme, 60000);
+// ---- 検索(スポット名 + 地名) ----
+let qTimer = null, qSeq = 0, placeMarker = null;
+const norm = s => String(s == null ? "" : s).toLowerCase();
+function showSpot(s) {
+  const w = wAt(s, state.day), res = w ? VEHICLES[vehicle].score(w) : { score: null, notes: [] }, dist = userPos ? km(userPos, s) : null;
+  centerOn([s.lat, s.lng], Math.max(map.getZoom(), 11));
+  L.popup({ maxWidth: 300 }).setLatLng([s.lat, s.lng]).setContent(spotPopup(s, w, res, dist)).openOn(map);
+  loadWeatherSoon();
+}
+function goPlace(p) {
+  // 距離はいつも「現在地」から測る。検索した地名は、地図を動かすだけで、距離の基準は変えない
+  if (placeMarker) map.removeLayer(placeMarker);
+  placeMarker = L.circleMarker([p.lat, p.lng], { radius: 8, color: "#fff", weight: 3, fillColor: "#ff4d0d", fillOpacity: 1 }).bindTooltip(p.title).addTo(map);
+  centerOn([p.lat, p.lng], 10);
+  area = map.getBounds();   // 移動した先の範囲を表示する(距離は現在地から測る)
+  const msg = "「" + p.title + "」の周辺を表示します";
+  render(); loadWeatherSoon(); updateReSearch();
+  toast(msg);
+}
+function closeResults() { $("qRes").hidden = true; }
+function drawResults(spots, places, state2) {
+  const box = $("qRes"); box.innerHTML = "";
+  const add = (label, items, onpick, sub) => {
+    if (!items.length) return;
+    const hd = document.createElement("div"); hd.className = "qh"; hd.textContent = label; box.appendChild(hd);
+    items.forEach(it => {
+      const b = document.createElement("button"); b.type = "button";
+      const t = document.createElement("span"); t.textContent = it.name || it.title; b.appendChild(t);
+      const s = document.createElement("span"); s.className = "qs"; s.textContent = sub(it); b.appendChild(s);
+      b.onclick = () => { onpick(it); closeResults(); $("q").blur(); };
+      box.appendChild(b);
+    });
+  };
+  add("スポット", spots, s => { showSpot(s); if (window.innerWidth <= 720) $("panel").classList.add("peek"); }, s => s.area || "");
+  add("地名・住所", places, p => { goPlace(p); if (window.innerWidth <= 720) $("panel").classList.add("peek"); }, () => "");
+  if (state2 === "loading") { const d = document.createElement("div"); d.className = "qe"; d.textContent = "地名を検索中…"; box.appendChild(d); }
+  if (state2 === "error") { const d = document.createElement("div"); d.className = "qe"; d.textContent = "地名検索に接続できませんでした"; box.appendChild(d); }
+  if (state2 === "done" && !spots.length && !places.length) { const d = document.createElement("div"); d.className = "qe"; d.textContent = "見つかりませんでした"; box.appendChild(d); }
+  box.hidden = false;
+}
+async function searchPlaces(q) {   // 国土地理院の住所・地名検索
+  const r = await fetch("https://msearch.gsi.go.jp/address-search/AddressSearch?q=" + encodeURIComponent(q));
+  if (!r.ok) throw new Error(r.status);
+  const j = await r.json();
+  return j.slice(0, 6).map(f => ({ title: f.properties.title, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0] }))
+          .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+}
+function onQuery() {
+  const q = $("q").value.trim();
+  clearTimeout(qTimer);
+  if (q.length < 1) { closeResults(); return; }
+  const n = norm(q);
+  const spots = allSpots().filter(s => norm(s.name).includes(n) || norm(s.area).includes(n)).slice(0, 6);
+  drawResults(spots, [], q.length >= 2 ? "loading" : "done");
+  if (q.length < 2) return;
+  const seq = ++qSeq;
+  qTimer = setTimeout(async () => {
+    try { const places = await searchPlaces(q); if (seq === qSeq) drawResults(spots, places, "done"); }
+    catch (e) { if (seq === qSeq) drawResults(spots, [], "error"); }
+  }, 350);
+}
+$("q").addEventListener("input", onQuery);
+$("q").addEventListener("focus", () => { $("panel").classList.remove("peek"); if ($("q").value.trim()) onQuery(); });
+$("q").addEventListener("keydown", e => {
+  if (e.key === "Escape") { closeResults(); $("q").blur(); }
+  if (e.key === "Enter") { const first = $("qRes").querySelector("button"); if (first) first.click(); }
+});
+document.addEventListener("click", e => { if (!e.target.closest(".search")) closeResults(); });
+function updateReSearch() {   // 地図を動かして、いまの表示範囲から外れたら「このエリアで探す」を出す
+  const c = map.getCenter(), r = Number($("fRadius").value);
+  let outside = false;
+  if (area) outside = !area.contains(c);
+  else if (userPos && r) outside = km(userPos, { lat: c.lat, lng: c.lng }) > r;
+  $("reSearch").hidden = !outside;
+}
+$("reSearch").onclick = () => { area = map.getBounds(); $("reSearch").hidden = true; render(); loadWeatherSoon(); $("list").parentElement.scrollTop = 0; };
+$("areaClear").onclick = () => { area = null; render(); loadWeatherSoon(); updateReSearch(); };
+map.on("moveend", () => { loadWeatherSoon(); updateReSearch(); });
+render();
+locate(true); // 起動時に現在地を取得して、その周辺を表示する(許可されなければ京都周辺のまま)
+ensureAuth().then(loadRemote).then(() => { render(); loadWeather(); });
+
+</script>
+</body>
+</html>
